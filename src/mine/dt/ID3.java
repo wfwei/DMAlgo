@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -18,6 +18,61 @@ import org.dom4j.DocumentHelper;
 import org.dom4j.Element;
 import org.dom4j.io.OutputFormat;
 import org.dom4j.io.XMLWriter;
+
+class TreeNode {
+    private boolean isLeaf;
+    private String splitAttr; // 当前节点的分裂属性名称，如果分裂
+    private String resultValue;
+    private TreeNode parent;
+    private HashMap<String, TreeNode> children = new HashMap<String, TreeNode>();
+//    private List<String[]> data = new LinkedList<String[]>();
+
+    public TreeNode() {
+	this.parent = null;
+	this.isLeaf = false;
+    }
+
+    public void addChild(String attrVal, TreeNode child) {
+	this.children.put(attrVal, child);
+    }
+
+    public HashMap<String, TreeNode> getChildren() {
+	return children;
+    }
+
+    public boolean isLeaf() {
+	return isLeaf;
+    }
+
+    public void setLeaf(boolean isLeaf) {
+	this.isLeaf = isLeaf;
+    }
+
+    public TreeNode getParent() {
+	return parent;
+    }
+
+    public void setParent(TreeNode parent) {
+	this.parent = parent;
+    }
+
+    public String getResultValue() {
+	return resultValue;
+    }
+
+    public void setResultValue(String resultValue) {
+	this.resultValue = resultValue;
+    }
+
+    public String getSplitAttr() {
+	return splitAttr;
+    }
+
+    public void setSplitAttr(String splitAttr) {
+	this.splitAttr = splitAttr;
+    }
+
+}
 
 /**
  * ID3决策树
@@ -45,8 +100,8 @@ public class ID3 {
     private ArrayList<String[]> data = new ArrayList<String[]>();
     private String dataFile, decAttrName, resultFile;
     private int decAttrIdx;
-    private Document xmldoc;
-    private Element root;
+
+    private TreeNode tree;
     private String rootNode = "ID3DecisionTree";
 
     public ID3(String dataFile, String decAttrName, String resultFile) {
@@ -77,7 +132,7 @@ public class ID3 {
 	    dataIdxList.add(i);
 	}
 
-	buildTree(attrIdxList, dataIdxList, root);
+	buildTree(attrIdxList, dataIdxList, tree);
 	writeXML();
     }
 
@@ -108,8 +163,7 @@ public class ID3 {
 	    e1.printStackTrace();
 	}
 
-	xmldoc = DocumentHelper.createDocument();
-	root = xmldoc.addElement(rootNode);
+	tree = new TreeNode();
     }
 
     private static final double MAX_ENTROPY = 1d;
@@ -123,11 +177,12 @@ public class ID3 {
     }
 
     private void buildTree(List<Integer> attrIdxList,
-	    List<Integer> dataIdxList, Element root) {
+	    List<Integer> dataIdxList, TreeNode tree) {
 
 	// 如果不可再分（当前数据全都属于一类，或者当前属性没有区分能力），则结束
 	if (attrIdxList.size() == 0 || isPure(dataIdxList)) {
-	    root.addText(data.get(dataIdxList.get(0))[decAttrIdx]);
+	    tree.setLeaf(true);
+	    tree.setResultValue(data.get(dataIdxList.get(0))[decAttrIdx]);
 	    return;
 	}
 
@@ -146,8 +201,11 @@ public class ID3 {
 	String splitAttr = attrs.get(splitAttrIdx);
 	String[] splitAttrVals = attrVals.get(splitAttrIdx);
 	// 保存当前结果
+	tree.setSplitAttr(splitAttr);
 	for (String attrVal : splitAttrVals) {
-	    root.addElement(splitAttr).addAttribute("value", attrVal);
+	    TreeNode child = new TreeNode();
+	    child.setParent(tree);
+	    tree.addChild(attrVal, child);
 	}
 
 	// 按照当前切分，分发数据都不同属性
@@ -162,13 +220,13 @@ public class ID3 {
 	    curDataIdxList.add(dataIdx);
 	}
 	dataIdxList.clear();
-	@SuppressWarnings("rawtypes")
-	Iterator iter = root.elementIterator();
-	while (iter.hasNext()) {
-	    Element curRoot = (Element) iter.next();
-	    String curAttrVal = curRoot.attributeValue("value");
-	    buildTree(attrIdxList, dataIdxMap.get(curAttrVal), curRoot);
+
+	HashMap<String, TreeNode> children = tree.getChildren();
+	for (String attrVal : children.keySet()) {
+	    buildTree(attrIdxList, dataIdxMap.get(attrVal),
+		    children.get(attrVal));
 	}
+
     }
 
     private double calcEntropy(int splitAttrIdx, List<Integer> dataIdxList) {
@@ -216,8 +274,30 @@ public class ID3 {
 	return res;
     }
 
+    private void cloneTree(TreeNode from, Element to) {
+	if (from != null) {
+	    HashMap<String, TreeNode> children = from.getChildren();
+	    for (String attrVal : children.keySet()) {
+		Element ele = DocumentHelper.createElement(from.getSplitAttr());
+		ele.addAttribute("value", attrVal);
+		to.add(ele);
+		TreeNode child = children.get(attrVal);
+		if (child.isLeaf()) {
+		    ele.addText(child.getResultValue());
+		} else {
+		    cloneTree(child, ele);
+		}
+	    }
+	}
+    }
+
     // 把xml写入文件
     public void writeXML() {
+
+	Document xmldoc = DocumentHelper.createDocument();
+	Element root = xmldoc.addElement(rootNode);
+	cloneTree(tree, root);
+
 	try {
 	    File file = new File(resultFile);
 	    if (!file.exists())
